@@ -5,6 +5,8 @@ import { MetricCard } from "@/components/dashboard/MetricCard";
 import { TelemetryChart } from "@/components/dashboard/TelemetryChart";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { ApprovalsQueue } from "@/components/dashboard/ApprovalsQueue";
+import { ProblemAlignmentCard } from "@/components/dashboard/ProblemAlignmentCard";
+import { AgentCycleModal } from "@/components/dashboard/AgentCycleModal";
 import { Button } from "@/components/ui/Button";
 import {
   MOCK_METRICS,
@@ -13,14 +15,16 @@ import {
   MOCK_PENDING_ACTIONS,
   MOCK_LEDGER_ENTRIES,
 } from "@/lib/mock-data";
+import type { ActivityItem, Metric } from "@/lib/types/domain";
 import { Play, Download, Sparkles, RefreshCw, CheckCircle2 } from "lucide-react";
 import { useCommandCenter } from "@/components/providers/CommandCenterContext";
 
 export default function DashboardPage() {
   const { facility } = useCommandCenter();
-  const [triggering, setTriggering] = useState(false);
+  const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
   const [exported, setExported] = useState(false);
-  const [activities, setActivities] = useState(MOCK_ACTIVITY);
+  const [metrics, setMetrics] = useState<Metric[]>(MOCK_METRICS);
+  const [activities, setActivities] = useState<ActivityItem[]>(MOCK_ACTIVITY);
 
   const handleExportLedger = () => {
     const headers = "Action ID,Facility,Verified Date,Impacts,Audit Status\n";
@@ -40,21 +44,84 @@ export default function DashboardPage() {
     setTimeout(() => setExported(false), 2500);
   };
 
-  const handleTriggerCycle = () => {
-    setTriggering(true);
-    setTimeout(() => {
-      const newActivity = {
-        id: `act-${Date.now()}`,
-        agentId: "orchestrator" as const,
-        kind: "plan" as const,
-        title: "Manual Orchestrator Reasoning Cycle Initiated",
-        detail: `Operator dispatched ad-hoc synthesis across ${facility}. Querying BigQuery telemetry partitions.`,
+  const handleCycleComplete = (results: {
+    co2Added: number;
+    costAdded: number;
+    waterAdded: number;
+    energyAdded: number;
+  }) => {
+    // 1. Increment dashboard metrics with realized savings
+    setMetrics((prev) =>
+      prev.map((m) => {
+        if (m.id === "co2") {
+          return { ...m, value: Number((m.value + results.co2Added).toFixed(1)), deltaPct: m.deltaPct + 1.2 };
+        }
+        if (m.id === "cost") {
+          return { ...m, value: m.value + results.costAdded, deltaPct: m.deltaPct + 1.8 };
+        }
+        if (m.id === "water") {
+          return { ...m, value: Number((m.value + results.waterAdded).toFixed(1)), deltaPct: m.deltaPct + 0.9 };
+        }
+        if (m.id === "energy") {
+          return { ...m, value: Number((m.value + results.energyAdded).toFixed(1)), deltaPct: m.deltaPct + 1.5 };
+        }
+        return m;
+      })
+    );
+
+    // 2. Prepend synchronized multi-agent reasoning steps to activity stream
+    const runId = `run-${Math.floor(Math.random() * 900) + 100}`;
+    const newItems: ActivityItem[] = [
+      {
+        id: `act-${Date.now()}-5`,
+        agentId: "executor",
+        kind: "execution",
+        title: "BACnet VFD Frequency Modulation Dispatched",
+        detail: `Closed-loop actuator dispatch completed across ${facility}. Equipment harmonics within IEEE 519 spec.`,
         at: Date.now(),
-        runId: `run-${Math.floor(Math.random() * 900) + 100}`,
-      };
-      setActivities([newActivity, ...activities]);
-      setTriggering(false);
-    }, 800);
+        runId,
+        impact: { kind: "cost", value: results.costAdded },
+      },
+      {
+        id: `act-${Date.now()}-4`,
+        agentId: "safety",
+        kind: "safety",
+        title: "ASHRAE 55 Occupant Thermal Comfort Verified",
+        detail: `Deterministic safety bounds evaluated by AEGIS-04. Predicted Mean Vote (PMV) within ±0.5 band.`,
+        at: Date.now() - 500,
+        runId,
+      },
+      {
+        id: `act-${Date.now()}-3`,
+        agentId: "optimizer",
+        kind: "plan",
+        title: "Peak Carbon Shaving Schedule Synthesized",
+        detail: `Simulated 450 kW battery discharge & precooling window against ERCOT carbon intensity index.`,
+        at: Date.now() - 1000,
+        runId,
+        impact: { kind: "co2", value: results.co2Added },
+      },
+      {
+        id: `act-${Date.now()}-2`,
+        agentId: "analyst",
+        kind: "analysis",
+        title: "BigQuery Anomaly Detection: Sub-04 Thermal Drift",
+        detail: `Chronos-02 flagged +18.4% deviation from thermodynamic baseline. Confidence: 96.2%.`,
+        at: Date.now() - 1500,
+        runId,
+      },
+      {
+        id: `act-${Date.now()}-1`,
+        agentId: "orchestrator",
+        kind: "plan",
+        title: "Autonomous Fleet Consensus Cycle Initiated",
+        detail: `Operator requested ad-hoc synthesis across ${facility}. Decomposing optimization goals across 5 Vertex AI agents.`,
+        at: Date.now() - 2000,
+        runId,
+      },
+    ];
+
+    setActivities((prev) => [...newItems, ...prev]);
   };
 
   return (
@@ -124,13 +191,11 @@ export default function DashboardPage() {
                   size={15}
                   strokeWidth={2.5}
                   style={{
-                    animation: triggering ? "spin 0.8s linear infinite" : "none",
                     color: "#060911",
                   }}
                 />
               }
-              loading={triggering}
-              onClick={handleTriggerCycle}
+              onClick={() => setIsCycleModalOpen(true)}
               style={{
                 padding: "0.55rem 1.15rem",
                 fontSize: "0.875rem",
@@ -138,11 +203,14 @@ export default function DashboardPage() {
                 letterSpacing: "-0.01em",
               }}
             >
-              {triggering ? "Synthesizing Cycle..." : "Run Agent Cycle"}
+              Run Agent Cycle
             </Button>
           </div>
         </div>
       </div>
+
+      {/* Problem Statement Alignment & Autonomous Architecture Banner */}
+      <ProblemAlignmentCard />
 
       {/* 4 Impact Metric Cards */}
       <div
@@ -152,7 +220,7 @@ export default function DashboardPage() {
           gap: "1rem",
         }}
       >
-        {MOCK_METRICS.map((metric) => (
+        {metrics.map((metric) => (
           <MetricCard key={metric.id} metric={metric} />
         ))}
       </div>
@@ -171,6 +239,13 @@ export default function DashboardPage() {
         <ActivityFeed activities={activities} />
         <ApprovalsQueue initialActions={MOCK_PENDING_ACTIONS} />
       </div>
+
+      {/* Interactive Multi-Agent Cycle Modal */}
+      <AgentCycleModal
+        isOpen={isCycleModalOpen}
+        onClose={() => setIsCycleModalOpen(false)}
+        onCycleComplete={handleCycleComplete}
+      />
     </div>
   );
 }
