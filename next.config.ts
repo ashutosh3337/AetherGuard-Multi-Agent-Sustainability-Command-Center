@@ -24,9 +24,6 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Minimal self-contained server bundle → small container image, fast Cloud Run cold starts.
   output: "standalone",
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: true,
   },
