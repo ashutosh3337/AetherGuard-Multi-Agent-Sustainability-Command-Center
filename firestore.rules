@@ -1,0 +1,127 @@
+rules_version = '2';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AetherGuard — Firestore Security Rules
+//
+// Principles
+//  1. Default DENY. Every path must be explicitly opened.
+//  2. Tenant isolation: data lives under /orgs/{orgId}; a user may only touch
+//     the org stamped into their *custom claims* (set server-side only).
+//  3. Agent-produced data (runs, actions, audit) is READ-ONLY to clients.
+//     Only the Admin SDK (Cloud Run agents / Functions) writes it — the Admin
+//     SDK bypasses rules, so no client can forge an agent decision.
+//  4. The few client writes allowed are field-whitelisted and type-checked.
+//  5. Roles come from token claims (admin | analyst | viewer), never from a
+//     user-editable document.
+// ═════════════════════════════════════════════════════════════════════════════
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+    function claims() {
+      return request.auth.token;
+    }
+    function hasRole(roles) {
+      return signedIn() && claims().role is string && claims().role in roles;
+    }
+    function inOrg(orgId) {
+      return signedIn() && claims().orgId is string && claims().orgId == orgId;
+    }
+    function isAdmin(orgId)   { return inOrg(orgId) && hasRole(['admin']); }
+    function isAnalyst(orgId) { return inOrg(orgId) && hasRole(['admin', 'analyst']); }
+    function isMember(orgId)  { return inOrg(orgId) && hasRole(['admin', 'analyst', 'viewer']); }
+
+    function onlyChanges(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    function validPrefs(p) {
+      return p is map
+        && p.keys().hasOnly(['sidebarCollapsed', 'contextPanelOpen', 'timeRange', 'defaultFacilityId'])
+        && (!('sidebarCollapsed' in p) || p.sidebarCollapsed is bool)
+        && (!('contextPanelOpen' in p) || p.contextPanelOpen is bool)
+        && (!('timeRange' in p) || p.timeRange in ['24h', '7d', '30d'])
+        && (!('defaultFacilityId' in p) || (p.defaultFacilityId is string && p.defaultFacilityId.size() <= 64));
+    }
+
+    // ── User profiles (mirror of claims; role is NOT authoritative here) ─────
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      // Users may only edit UI preferences; role/orgId/email are server-owned.
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && onlyChanges(['prefs', 'updatedAt'])
+        && validPrefs(request.resource.data.prefs)
+        && request.resource.data.updatedAt == request.time;
+      allow create, delete: if false; // provisioned by the beforeUserCreated function
+    }
+
+    // ── Organization tenant ──────────────────────────────────────────────────
+    match /orgs/{orgId} {
+      allow read: if isMember(orgId);
+      allow write: if false;
+
+      match /facilities/{facilityId} {
+        allow read: if isMember(orgId);
+        allow write: if false;
+      }
+
+      // Agent runs + their streamed reasoning steps: written only by agents.
+      match /agentRuns/{runId} {
+        allow read: if isMember(orgId);
+        allow write: if false;
+
+        match /steps/{stepId} {
+          allow read: if isMember(orgId);
+          allow write: if false;
+        }
+      }
+
+      // Proposed / executed actions. Approvals go through the API (server
+      // verifies role + Safety verdict and writes an audit entry).
+      match /actions/{actionId} {
+        allow read: if isMember(orgId);
+        allow write: if false;
+      }
+
+      // Alerts: analysts/admins may acknowledge — and nothing else.
+      match /alerts/{alertId} {
+        allow read: if isMember(orgId);
+        allow update: if isAnalyst(orgId)
+          && onlyChanges(['ack'])
+          && request.resource.data.ack is map
+          && request.resource.data.ack.keys().hasOnly(['uid', 'at'])
+          && request.resource.data.ack.uid == request.auth.uid
+          && request.resource.data.ack.at == request.time
+          && !('ack' in resource.data && resource.data.ack != null); // ack once
+        allow create, delete: if false;
+      }
+
+      // Episodic agent memory: analysts+ may inspect it.
+      match /memories/{memoryId} {
+        allow read: if isAnalyst(orgId);
+        allow write: if false;
+      }
+
+      // Policies & thresholds consumed by the Safety agent.
+      match /policies/{policyId} {
+        allow read: if isMember(orgId);
+        allow write: if false; // changed via audited admin API only
+      }
+
+      // Immutable audit trail. Admin read-only; nobody can write/edit/delete.
+      match /auditLogs/{logId} {
+        allow read: if isAdmin(orgId);
+        allow write: if false;
+      }
+    }
+
+    // ── Everything else (rateLimits, internal state, …) ─────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

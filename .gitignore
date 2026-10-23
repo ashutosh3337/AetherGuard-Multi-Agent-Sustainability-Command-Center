@@ -1,0 +1,29 @@
+# deps
+node_modules/
+functions/node_modules/
+
+# build
+.next/
+out/
+functions/lib/
+*.tsbuildinfo
+
+# env & secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.pem
+service-account*.json
+*-credentials.json
+
+# firebase
+.firebase/
+.emulator-data/
+firebase-debug*.log
+firestore-debug*.log
+ui-debug*.log
+.firebaserc
+
+# misc
+.DS_Store
+npm-debug.log*
